@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CamFX Remote</title>
+<style>
+  :root { color-scheme: dark; --bg:#0f1115; --card:#1a1d24; --line:#2b303a; --fg:#e8eaf0; --mut:#8b92a1; --acc:#4f8cff; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.4 system-ui,sans-serif; }
+  main { max-width:1100px; margin:0 auto; padding:16px; display:grid; gap:16px; grid-template-columns:1fr; }
+  @media (min-width:860px) { main { grid-template-columns:1.4fr 1fr; align-items:start; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; }
+  .col { display:grid; gap:16px; }
+  h1 { font-size:18px; margin:0 0 4px; } h2 { font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--mut); margin:0 0 10px; }
+  #stage { position:relative; background:#000; border-radius:8px; overflow:hidden; touch-action:none; user-select:none; }
+  #view { width:100%; display:block; min-height:200px; pointer-events:none; }
+  #stage canvas { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+  #stage.draw { cursor:crosshair; } #stage.move { cursor:grab; }
+  button, .chip { background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:8px 12px; font:inherit; cursor:pointer; }
+  button:hover { border-color:var(--acc); }
+  .chip[aria-pressed=true], button.on { background:var(--acc); border-color:var(--acc); color:#fff; }
+  .chips, .row { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:8px 0; }
+  label { display:grid; grid-template-columns:90px 1fr 44px; gap:8px; align-items:center; margin:8px 0; color:var(--mut); }
+  label output { text-align:right; color:var(--fg); }
+  input[type=range] { width:100%; accent-color:var(--acc); }
+  input[type=text] { width:100%; background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:9px 10px; font:inherit; }
+  #selText { font-family:"Comic Sans MS","Comic Neue","Chalkboard SE",cursive; font-weight:bold; }
+  input[type=color] { width:44px; height:34px; border:1px solid var(--line); border-radius:8px; background:none; padding:2px; }
+  #status, .hint { color:var(--mut); font-size:13px; }
+  #edCanvas { max-width:100%; max-height:260px; border-radius:8px; display:block;
+    background:repeating-conic-gradient(#3a3f4b 0 25%, #2a2e38 0 50%) 0 0/16px 16px; }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<main>
+  <section class="card">
+    <h1>CamFX Remote</h1>
+    <div id="status">Connecting…</div>
+    <div class="row">
+      <button id="toolMove" class="on">Move items</button>
+      <button id="toolDraw">Draw</button>
+    </div>
+    <div id="stage" class="move">
+      <img id="view" alt="Live camera preview">
+      <canvas id="ov"></canvas>
+      <canvas id="ink"></canvas>
+    </div>
+    <div class="row">
+      <button id="flip">Flip camera</button>
+      <button id="torch">Torch</button>
+      <button id="capture">Capture to phone</button>
+      <a href="#" id="snap"><button type="button">Download frame</button></a>
+    </div>
+  </section>
+
+  <section class="col">
+    <div class="card">
+      <h2>Color filter</h2>
+      <div class="chips" id="filters"></div>
+      <label>Brightness <input type="range" id="brightness" min="-100" max="100"><output></output></label>
+      <label>Contrast <input type="range" id="contrast" min="50" max="200"><output></output></label>
+      <label>Saturation <input type="range" id="saturation" min="0" max="200"><output></output></label>
+      <button id="reset">Reset</button>
+    </div>
+
+    <div class="card">
+      <h2>Draw</h2>
+      <div class="row">
+        <input type="color" id="penColor" value="#ff3b30">
+        <button id="undo">Undo</button>
+        <button id="clearInk">Clear drawing</button>
+      </div>
+      <label>Pen size <input type="range" id="penSize" min="2" max="40" value="8"><output>0.8</output></label>
+      <div class="hint">Pick “Draw” above, then draw on the preview.</div>
+    </div>
+
+    <div class="card">
+      <h2>Text &amp; images</h2>
+      <div class="row">
+        <button id="addText">Add text</button>
+        <button id="addImage">Add image…</button>
+        <input type="file" id="file" accept="image/*" hidden>
+      </div>
+      <div class="chips" id="itemList"></div>
+      <div class="hint">Click an item (or pick “Move items” and click it on the preview) to edit it. Drag it to move it.</div>
+    </div>
+
+    <div class="card" id="sel" hidden>
+      <h2 id="selTitle">Selected</h2>
+      <div id="selTextRow"><input type="text" id="selText" placeholder="Your text (Comic font on the camera)"></div>
+      <div class="row" id="selColorRow"><span style="color:var(--mut)">Color</span><input type="color" id="selColor" value="#ffffff"></div>
+      <label>Size <input type="range" id="selSize" min="2" max="100"><output></output></label>
+      <label>Rotate <input type="range" id="selRot" min="-180" max="180"><output></output></label>
+      <button id="selDelete">Delete</button>
+    </div>
+
+    <div class="card" id="editor" hidden>
+      <h2>New image</h2>
+      <canvas id="edCanvas"></canvas>
+      <div class="chips" id="bgModes"></div>
+      <div id="magicRow"><label>Tolerance <input type="range" id="tol" min="5" max="150" value="45"><output>45</output></label>
+        <div class="hint">Removes the plain background starting from the edges. Works best on solid backgrounds.</div></div>
+      <div id="aiRow"><button id="runAi">Remove background with AI</button>
+        <div class="hint" id="aiHint">Needs internet on this computer. The first run downloads a model (about 40 MB).</div></div>
+      <div class="row"><button id="edAdd" class="on">Add to camera</button><button id="edCancel">Cancel</button></div>
+    </div>
+  </section>
+</main>
+
+<script>
+// Served by the phone: the page URL carries the PIN. Opened as a plain file: ask for the phone address and PIN once.
+const qs = new URLSearchParams(location.search);
+let BASE = '', K = qs.get('k') || '';
+if (location.protocol === 'file:' || !K) {
+  const saved = JSON.parse(localStorage.getItem('camfx') || '{}');
+  BASE = saved.base || prompt('Phone address shown in the app (e.g. 192.168.1.20:8080)', '') || '';
+  K = saved.k || prompt('PIN shown in the app', '') || '';
+  localStorage.setItem('camfx', JSON.stringify({ base: BASE, k: K }));
+  BASE = 'http://' + BASE.replace(/^https?:\/\//, '').replace(/\/$/, '');
+}
+const $ = id => document.getElementById(id);
+const url = p => `${BASE}${p}?k=${encodeURIComponent(K)}`;
+
+let state = {}, items = [], selId = null, tool = 'move';
+let lastInput = 0, dragging = false;
+
+// ---- network: one ordered queue so batches can't overtake each other ----
+let chain = Promise.resolve();
+async function api(path, body) {
+  const r = await fetch(url(path), body ? { method:'POST', body:JSON.stringify(body) } : {});
+  if (!r.ok) throw new Error(r.status);
+  return r.json();
+}
+function enqueue(path, body) {
+  const p = chain.then(() => api(path, body));
+  chain = p.catch(setOffline);
+  return p;
+}
+function setOffline() { $('status').textContent = 'Phone not reachable. Is the app open?'; }
+
+// ---- camera / filter state ----
+let timer;
+function send(change) {
+  Object.assign(state, change);
+  renderState();
+  clearTimeout(timer);
+  timer = setTimeout(() => api('/api/state', change).catch(setOffline), 60);
+}
+function renderState() {
+  $('filters').replaceChildren(...(state.filters || []).map(f => {
+    const b = document.createElement('button');
+    b.className = 'chip'; b.textContent = f; b.setAttribute('aria-pressed', state.filter === f);
+    b.onclick = () => send({ filter: f });
+    return b;
+  }));
+  for (const id of ['brightness','contrast','saturation']) {
+    $(id).value = state[id];
+    $(id).nextElementSibling.textContent = state[id];
+  }
+  $('torch').classList.toggle('on', !!state.torch);
+}
+for (const id of ['brightness','contrast','saturation'])
+  $(id).oninput = e => send({ [id]: +e.target.value });
+$('flip').onclick = () => send({ front: !state.front });
+$('torch').onclick = () => send({ torch: !state.torch });
+$('reset').onclick = () => send({ brightness:0, contrast:100, saturation:100, filter:'none' });
+$('capture').onclick = async () => {
+  try { const r = await api('/api/capture', {}); $('status').textContent = r.saved ? 'Saved on the phone.' : 'No frame yet.'; }
+  catch { setOffline(); }
+};
+$('snap').href = url('/snapshot.jpg');
+$('snap').download = 'camfx.jpg';
+
+// ---- items (text + images) ----
+const sel = () => items.find(i => i.id === selId);
+const label = i => i.type === 'text' ? `“${i.text.slice(0, 14) || '…'}”` : 'Image ' + i.id.slice(1);
+
+const pending = {};   // id -> changes waiting to be sent
+let pendingTimer;
+function patchItem(change, id = selId) {
+  const it = items.find(i => i.id === id);
+  if (!it) return;
+  Object.assign(it, change);
+  pending[id] = Object.assign(pending[id] || {}, change);
+  clearTimeout(pendingTimer);
+  pendingTimer = setTimeout(flushPending, 50);
+}
+function flushPending() {
+  for (const id of Object.keys(pending)) {
+    enqueue('/api/items', { op:'update', id, ...pending[id] });
+    delete pending[id];
+  }
+}
+function applyServer(r) {
+  state = { ...state, ...r };
+  items = r.items || [];
+  if (!items.some(i => i.id === selId)) selId = null;
+}
+
+function renderItems() {
+  $('itemList').replaceChildren(...items.map(i => {
+    const b = document.createElement('button');
+    b.className = 'chip'; b.textContent = label(i); b.setAttribute('aria-pressed', i.id === selId);
+    b.onclick = () => { selId = i.id; renderItems(); renderSel(); drawMarker(); };
+    return b;
+  }));
+  renderSel(); drawMarker();
+}
+function renderSel() {
+  const it = sel();
+  $('sel').hidden = !it;
+  if (!it) return;
+  $('selTitle').textContent = it.type === 'text' ? 'Selected text' : 'Selected image';
+  $('selTextRow').hidden = $('selColorRow').hidden = it.type !== 'text';
+  if (document.activeElement !== $('selText')) $('selText').value = it.text;
+  $('selColor').value = it.color;
+  $('selSize').value = it.size; $('selSize').nextElementSibling.textContent = it.size;
+  $('selRot').value = it.rotation; $('selRot').nextElementSibling.textContent = it.rotation;
+}
+for (const [id, key, num] of [['selText','text'],['selColor','color'],['selSize','size',1],['selRot','rotation',1]])
+  $(id).oninput = e => {
+    lastInput = Date.now();
+    patchItem({ [key]: num ? +e.target.value : e.target.value });
+    if (key === 'text') renderItemsKeepFocus(); else if (num) e.target.nextElementSibling.textContent = e.target.value;
+  };
+function renderItemsKeepFocus() { // refresh chip labels without touching the focused text box
+  $('itemList').replaceChildren(...items.map(i => {
+    const b = document.createElement('button');
+    b.className = 'chip'; b.textContent = label(i); b.setAttribute('aria-pressed', i.id === selId);
+    b.onclick = () => { selId = i.id; renderItems(); };
+    return b;
+  }));
+}
+$('selDelete').onclick = async () => {
+  const id = selId; items = items.filter(i => i.id !== id); selId = null; renderItems();
+  enqueue('/api/items', { op:'delete', id });
+};
+$('addText').onclick = async () => {
+  const r = await enqueue('/api/items', { op:'addText', text:'Hello!', x:50, y:50, size:8, color:'#ffffff' }).catch(setOffline);
+  if (!r) return;
+  applyServer(r); selId = r.id; renderItems();
+  $('selText').focus(); $('selText').select();
+};
+
+// ---- stage: move items / draw ----
+const stage = $('stage'), ov = $('ov'), ink = $('ink');
+function setTool(t) {
+  tool = t;
+  stage.className = t;
+  $('toolMove').classList.toggle('on', t === 'move');
+  $('toolDraw').classList.toggle('on', t === 'draw');
+  drawMarker();
+}
+$('toolMove').onclick = () => setTool('move');
+$('toolDraw').onclick = () => setTool('draw');
+
+function fitCanvases() {
+  const r = stage.getBoundingClientRect();
+  for (const c of [ov, ink]) { c.width = Math.round(r.width); c.height = Math.round(r.height); }
+  drawMarker();
+}
+new ResizeObserver(fitCanvases).observe(stage);
+$('view').addEventListener('load', fitCanvases);
+
+function drawMarker() {
+  const g = ov.getContext('2d');
+  g.clearRect(0, 0, ov.width, ov.height);
+  const it = sel();
+  if (!it || tool !== 'move') return;
+  g.strokeStyle = '#4f8cff'; g.lineWidth = 2; g.setLineDash([5, 4]);
+  g.beginPath(); g.arc(it.x / 100 * ov.width, it.y / 100 * ov.height, 16, 0, Math.PI * 2); g.stroke();
+}
+const pos = e => {
+  const r = stage.getBoundingClientRect();
+  return { fx: (e.clientX - r.left) / r.width, fy: (e.clientY - r.top) / r.height, px: e.clientX - r.left, py: e.clientY - r.top };
+};
+
+let stroke = null, drawTimer;
+stage.addEventListener('pointerdown', e => {
+  stage.setPointerCapture(e.pointerId);
+  const p = pos(e);
+  if (tool === 'draw') {
+    const size = +$('penSize').value / 10;
+    stroke = { id: 's' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), color: $('penColor').value, size, sent: 0, pts: [p.fx, p.fy] };
+    const g = ink.getContext('2d');
+    g.lineCap = g.lineJoin = 'round'; g.strokeStyle = stroke.color; g.lineWidth = size / 100 * ink.width;
+    g.beginPath(); g.moveTo(p.px, p.py); g.lineTo(p.px + 0.01, p.py); g.stroke();
+    clearTimeout(drawTimer);
+    drawTimer = setInterval(flushStroke, 80);
+  } else {
+    // pick the item whose centre is closest to the pointer (within 60px)
+    let best = null, bd = 60;
+    for (const it of items) {
+      const d = Math.hypot(it.x / 100 * ov.width - p.px, it.y / 100 * ov.height - p.py);
+      if (d < bd) { bd = d; best = it; }
+    }
+    selId = best ? best.id : null;
+    dragging = !!best;
+    if (best) stage.style.cursor = 'grabbing';
+    renderItems();
+  }
+});
+stage.addEventListener('pointermove', e => {
+  const p = pos(e);
+  if (stroke) {
+    const g = ink.getContext('2d');
+    const [lx, ly] = stroke.pts.slice(-2);
+    g.beginPath(); g.moveTo(lx * ink.width, ly * ink.height); g.lineTo(p.px, p.py); g.stroke();
+    stroke.pts.push(p.fx, p.fy);
+  } else if (dragging && sel()) {
+    const x = Math.min(100, Math.max(0, p.fx * 100)), y = Math.min(100, Math.max(0, p.fy * 100));
+    patchItem({ x: +x.toFixed(1), y: +y.toFixed(1) });
+    drawMarker();
+  }
+});
+function flushStroke() {
+  if (!stroke) return;
+  const fresh = stroke.pts.slice(stroke.sent);
+  if (!fresh.length) return;
+  stroke.sent = stroke.pts.length;
+  enqueue('/api/draw', { op:'stroke', id:stroke.id, color:stroke.color, width:stroke.size, points:fresh.map(v => +v.toFixed(4)) });
+}
+function endPointer() {
+  if (stroke) {
+    flushStroke(); clearInterval(drawTimer); stroke = null;
+    // the phone now shows the line; drop the local copy once it has had time to arrive
+    setTimeout(() => { if (!stroke) ink.getContext('2d').clearRect(0, 0, ink.width, ink.height); }, 700);
+  }
+  dragging = false; stage.style.cursor = '';
+}
+stage.addEventListener('pointerup', endPointer);
+stage.addEventListener('pointercancel', endPointer);
+
+$('undo').onclick = () => { enqueue('/api/draw', { op:'undo' }); };
+$('clearInk').onclick = () => { enqueue('/api/draw', { op:'clear' }); };
+$('penSize').oninput = e => e.target.nextElementSibling.textContent = (e.target.value / 10).toFixed(1);
+
+// ---- add image + background removal (all done in this browser; the phone just gets a PNG) ----
+const MAX_SIDE = 800;
+let srcCanvas = null, resultCanvas = null, bgMode = 'none', srcBlob = null;
+const modes = [['none','Keep as is'], ['magic','Remove plain background'], ['ai','AI cut-out']];
+
+$('addImage').onclick = () => $('file').click();
+$('file').onchange = async e => {
+  const f = e.target.files[0]; e.target.value = '';
+  if (!f) return;
+  srcBlob = f;
+  const bmp = await createImageBitmap(f);
+  const s = Math.min(1, MAX_SIDE / Math.max(bmp.width, bmp.height));
+  srcCanvas = document.createElement('canvas');
+  srcCanvas.width = Math.round(bmp.width * s); srcCanvas.height = Math.round(bmp.height * s);
+  srcCanvas.getContext('2d').drawImage(bmp, 0, 0, srcCanvas.width, srcCanvas.height);
+  resultCanvas = srcCanvas;
+  $('editor').hidden = false;
+  setMode('none');
+  $('editor').scrollIntoView({ behavior:'smooth', block:'nearest' });
+};
+function setMode(m) {
+  bgMode = m;
+  $('bgModes').replaceChildren(...modes.map(([k, name]) => {
+    const b = document.createElement('button');
+    b.className = 'chip'; b.textContent = name; b.setAttribute('aria-pressed', k === m);
+    b.onclick = () => setMode(k);
+    return b;
+  }));
+  $('magicRow').hidden = m !== 'magic';
+  $('aiRow').hidden = m !== 'ai';
+  if (m === 'none') resultCanvas = srcCanvas;
+  if (m === 'magic') resultCanvas = magicEraser(srcCanvas, +$('tol').value);
+  showResult();
+}
+function showResult() {
+  const c = $('edCanvas');
+  c.width = resultCanvas.width; c.height = resultCanvas.height;
+  c.getContext('2d').drawImage(resultCanvas, 0, 0);
+}
+let tolTimer;
+$('tol').oninput = e => {
+  e.target.nextElementSibling.textContent = e.target.value;
+  clearTimeout(tolTimer);
+  tolTimer = setTimeout(() => { resultCanvas = magicEraser(srcCanvas, +e.target.value); showResult(); }, 80);
+};
+
+/** Flood-fills inward from the image border over pixels close to a corner colour and makes them transparent. */
+function magicEraser(src, tol) {
+  const w = src.width, h = src.height;
+  const out = document.createElement('canvas'); out.width = w; out.height = h;
+  const g = out.getContext('2d'); g.drawImage(src, 0, 0);
+  const img = g.getImageData(0, 0, w, h), d = img.data;
+  const corners = [0, w - 1, (h - 1) * w, h * w - 1].map(i => [d[i*4], d[i*4+1], d[i*4+2]]);
+  const dist = i => {
+    let m = 1e9;
+    for (const c of corners) {
+      const dr = d[i*4] - c[0], dg = d[i*4+1] - c[1], db = d[i*4+2] - c[2];
+      const v = Math.sqrt(dr*dr + dg*dg + db*db);
+      if (v < m) m = v;
+    }
+    return m;
+  };
+  const gone = new Uint8Array(w * h), stack = [];
+  const visit = i => { if (!gone[i] && dist(i) <= tol) { gone[i] = 1; stack.push(i); } };
+  for (let x = 0; x < w; x++) { visit(x); visit((h - 1) * w + x); }
+  for (let y = 0; y < h; y++) { visit(y * w); visit(y * w + w - 1); }
+  while (stack.length) {
+    const i = stack.pop(), x = i % w, y = (i / w) | 0;
+    if (x > 0) visit(i - 1);
+    if (x < w - 1) visit(i + 1);
+    if (y > 0) visit(i - w);
+    if (y < h - 1) visit(i + w);
+  }
+  // feather the edge: kept pixels touching removed ones fade out if they are only a little beyond the tolerance
+  const soft = tol * 1.4 + 1, alpha = new Uint8Array(w * h).fill(255);
+  for (let i = 0; i < w * h; i++) {
+    if (gone[i]) { alpha[i] = 0; continue; }
+    const x = i % w, y = (i / w) | 0;
+    const touches = (x > 0 && gone[i-1]) || (x < w-1 && gone[i+1]) || (y > 0 && gone[i-w]) || (y < h-1 && gone[i+w]);
+    if (touches) {
+      const dd = dist(i);
+      if (dd < soft) alpha[i] = Math.round(255 * Math.max(0, (dd - tol) / (soft - tol)));
+    }
+  }
+  for (let i = 0; i < w * h; i++) d[i*4+3] = Math.min(d[i*4+3], alpha[i]);
+  g.putImageData(img, 0, 0);
+  return out;
+}
+
+$('runAi').onclick = async () => {
+  const btn = $('runAi'), hint = $('aiHint');
+  btn.disabled = true; hint.textContent = 'Working… the first run downloads the model.';
+  try {
+    const { removeBackground } = await import('https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.5.5/+esm');
+    const blob = await removeBackground(srcBlob);
+    const bmp = await createImageBitmap(blob);
+    const s = Math.min(1, MAX_SIDE / Math.max(bmp.width, bmp.height));
+    resultCanvas = document.createElement('canvas');
+    resultCanvas.width = Math.round(bmp.width * s); resultCanvas.height = Math.round(bmp.height * s);
+    resultCanvas.getContext('2d').drawImage(bmp, 0, 0, resultCanvas.width, resultCanvas.height);
+    showResult();
+    hint.textContent = 'Done.';
+  } catch (err) {
+    hint.textContent = 'AI cut-out failed (no internet?). Try “Remove plain background” instead.';
+  }
+  btn.disabled = false;
+};
+
+$('edCancel').onclick = () => { $('editor').hidden = true; };
+$('edAdd').onclick = async () => {
+  $('edAdd').disabled = true;
+  try {
+    const png = resultCanvas.toDataURL('image/png').split(',')[1];
+    const r = await enqueue('/api/items', { op:'addImage', png, x:50, y:50, size:40 });
+    applyServer(r); selId = r.id; renderItems();
+    $('editor').hidden = true;
+  } catch { $('status').textContent = 'Could not send the image to the phone.'; }
+  $('edAdd').disabled = false;
+};
+
+// ---- startup + keep several browsers in sync ----
+async function refresh() {
+  const r = await api('/api/state');
+  applyServer(r);
+  renderState(); renderItems();
+}
+setInterval(async () => {
+  if (dragging || stroke || Date.now() - lastInput < 2500 || Object.keys(pending).length) return;
+  try { applyServer(await api('/api/state')); renderItems(); } catch { setOffline(); }
+}, 3000);
+
+(async () => {
+  try {
+    await refresh();
+    $('status').textContent = 'Connected';
+    $('view').src = url('/stream');
+    $('view').onerror = () => setTimeout(() => { $('view').src = url('/stream') + '&t=' + Date.now(); }, 1500);
+  } catch { $('status').textContent = 'Could not connect. Check the PIN in the URL.'; }
+})();
+</script>
+</body>
+</html>
