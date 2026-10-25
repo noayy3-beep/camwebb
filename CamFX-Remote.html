@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CamFX Remote (standalone)</title>
+<style>
+  :root { color-scheme: dark; --bg:#0f1115; --card:#1a1d24; --line:#2b303a; --fg:#e8eaf0; --mut:#8b92a1; --acc:#4f8cff; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.4 system-ui,sans-serif; }
+  main { max-width:1000px; margin:0 auto; padding:16px; display:grid; gap:16px; grid-template-columns:1fr; }
+  @media (min-width:800px) { main { grid-template-columns:1.4fr 1fr; align-items:start; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; }
+  h1 { font-size:18px; margin:0 0 4px; } h2 { font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--mut); margin:0 0 10px; }
+  #view { width:100%; background:#000; border-radius:8px; display:block; min-height:200px; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; }
+  button, .chip { background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:8px 12px; font:inherit; cursor:pointer; }
+  button:hover { border-color:var(--acc); }
+  .chip[aria-pressed=true], button.on { background:var(--acc); border-color:var(--acc); color:#fff; }
+  label { display:grid; grid-template-columns:90px 1fr 44px; gap:8px; align-items:center; margin:8px 0; color:var(--mut); }
+  label output { text-align:right; color:var(--fg); }
+  input[type=range] { width:100%; accent-color:var(--acc); }
+  input[type=text] { width:100%; background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:9px 10px; font:inherit; }
+  input[type=color] { width:44px; height:34px; border:1px solid var(--line); border-radius:8px; background:none; padding:2px; }
+  .row { display:flex; gap:8px; align-items:center; margin:8px 0; flex-wrap:wrap; }
+  #status { color:var(--mut); font-size:13px; }
+</style>
+</head>
+<body>
+<main>
+  <section class="card">
+    <h1>CamFX Remote</h1>
+    <div id="status">Connecting…</div>
+    <img id="view" alt="Live camera preview">
+    <div class="row">
+      <button id="flip">Flip camera</button>
+      <button id="torch">Torch</button>
+      <button id="capture">Capture to phone</button>
+      <a href="#" id="snap"><button type="button">Download frame</button></a>
+    </div>
+  </section>
+
+  <section style="display:grid;gap:16px">
+    <div class="card">
+      <h2>Color filter</h2>
+      <div class="chips" id="filters"></div>
+      <label>Brightness <input type="range" id="brightness" min="-100" max="100"><output></output></label>
+      <label>Contrast <input type="range" id="contrast" min="50" max="200"><output></output></label>
+      <label>Saturation <input type="range" id="saturation" min="0" max="200"><output></output></label>
+      <button id="reset">Reset adjustments</button>
+    </div>
+    <div class="card">
+      <h2>Text overlay</h2>
+      <input type="text" id="text" placeholder="Type text to show on camera…">
+      <div class="row"><span style="color:var(--mut)">Color</span><input type="color" id="textColor" value="#ffffff"></div>
+      <label>Size <input type="range" id="textSize" min="2" max="20"><output></output></label>
+      <label>Left/Right <input type="range" id="textX" min="0" max="100"><output></output></label>
+      <label>Up/Down <input type="range" id="textY" min="0" max="100"><output></output></label>
+    </div>
+  </section>
+</main>
+
+<script>
+// Standalone version: asks for the phone's address and PIN (shown in the app) once.
+const saved = JSON.parse(localStorage.getItem('camfx') || '{}');
+let BASE = saved.base, K = saved.k;
+if (!BASE || !K) {
+  BASE = prompt('Phone address shown in the app (e.g. 192.168.1.20:8080)', BASE || '');
+  K = prompt('PIN shown in the app', K || '');
+  localStorage.setItem('camfx', JSON.stringify({ base: BASE, k: K }));
+}
+BASE = 'http://' + BASE.replace(/^https?:\/\//, '').replace(/\/$/, '');
+const $ = id => document.getElementById(id);
+const url = p => `${BASE}${p}?k=${encodeURIComponent(K)}`;
+let state = {};
+let timer;
+
+async function api(path, body) {
+  const r = await fetch(url(path), body ? { method:'POST', body:JSON.stringify(body) } : {});
+  if (!r.ok) throw new Error(r.status);
+  return r.json();
+}
+
+// Send changes shortly after the last one so dragging a slider doesn't flood the phone.
+function send(change) {
+  Object.assign(state, change);
+  render();
+  clearTimeout(timer);
+  timer = setTimeout(() => api('/api/state', change).catch(setOffline), 60);
+}
+
+function setOffline() { $('status').textContent = 'Phone not reachable. Is the app open?'; }
+
+function render() {
+  $('filters').replaceChildren(...(state.filters || []).map(f => {
+    const b = document.createElement('button');
+    b.className = 'chip'; b.textContent = f; b.setAttribute('aria-pressed', state.filter === f);
+    b.onclick = () => send({ filter: f });
+    return b;
+  }));
+  for (const id of ['brightness','contrast','saturation','textSize','textX','textY']) {
+    $(id).value = state[id];
+    $(id).nextElementSibling.textContent = state[id];
+  }
+  if (document.activeElement !== $('text')) $('text').value = state.text ?? '';
+  $('textColor').value = state.textColor || '#ffffff';
+  $('torch').classList.toggle('on', !!state.torch);
+}
+
+for (const id of ['brightness','contrast','saturation','textSize','textX','textY'])
+  $(id).oninput = e => send({ [id]: +e.target.value });
+$('text').oninput = e => send({ text: e.target.value });
+$('textColor').oninput = e => send({ textColor: e.target.value });
+$('flip').onclick = () => send({ front: !state.front });
+$('torch').onclick = () => send({ torch: !state.torch });
+$('reset').onclick = () => send({ brightness:0, contrast:100, saturation:100, filter:'none' });
+$('capture').onclick = async () => {
+  try { const r = await api('/api/capture', {}); $('status').textContent = r.saved ? 'Saved on the phone.' : 'No frame yet.'; }
+  catch { setOffline(); }
+};
+$('snap').href = url('/snapshot.jpg');
+$('snap').download = 'camfx.jpg';
+
+(async () => {
+  try {
+    state = await api('/api/state');
+    $('status').textContent = 'Connected';
+    render();
+    $('view').src = url('/stream');
+    $('view').onerror = () => setTimeout(() => { $('view').src = url('/stream') + '&t=' + Date.now(); }, 1500);
+  } catch { $('status').textContent = 'Could not connect. Check the PIN in the URL.'; }
+})();
+</script>
+</body>
+</html>
